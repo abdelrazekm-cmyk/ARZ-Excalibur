@@ -1,0 +1,31 @@
+[
+  {
+    "id": "macro.punch_in_115",
+    "name": "ARZ Punch-In 115% + Dissolve",
+    "shortcut_vk": null,
+    "ctrl": false,
+    "alt": false,
+    "shift": false,
+    "steps": [
+      {
+        "step_type": "premiere",
+        "action": "set_clip_property",
+        "component": "Motion",
+        "param": "Scale",
+        "op": "mul",
+        "value": 1.15,
+        "axis": null
+      },
+      {
+        "step_type": "wait_ms",
+        "ms": 120
+      },
+      {
+        "step_type": "premiere",
+        "action": "apply_transition",
+        "name": "Cross Dissolve",
+        "is_video": true
+      }
+    ]
+  }
+]

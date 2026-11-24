@@ -1,0 +1,460 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ARZ-Excalibur Settings</title>
+  <style>
+    :root {
+      --bg: #110E0A;
+      --bg2: #17120D;
+      --surface: #1F1812;
+      --surface2: #281F17;
+      --line: rgba(219, 155, 62, 0.28);
+      --text: #F4EEE6;
+      --muted: #A99E90;
+      --brass: #DB9B3E;
+      --brass-hi: #EAAD54;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 16px 20px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .header img { height: 34px; }
+    .tabs { display: flex; gap: 8px; }
+    .tab-btn {
+      background: var(--bg2);
+      color: var(--muted);
+      border: 1px solid var(--line);
+      padding: 7px 18px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .tab-btn.active {
+      background: var(--brass);
+      color: #171005;
+      border-color: var(--brass);
+    }
+    .tab-pane { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .tab-pane.active { display: flex; }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    input[type="text"], select {
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    input[type="text"]:focus, select:focus { border-color: var(--brass); }
+    #cmdSearch { flex: 1; }
+    .btn {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--line);
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 12.5px;
+    }
+    .btn:hover { background: var(--surface2); border-color: var(--brass); }
+    .btn-brass {
+      background: var(--brass);
+      color: #171005;
+      font-weight: 600;
+      border-color: var(--brass);
+    }
+    .btn-brass:hover { background: var(--brass-hi); }
+
+    .cmd-list {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      background: var(--bg2);
+    }
+    .cmd-row {
+      display: grid;
+      grid-template-columns: 44px 1fr 180px 34px;
+      align-items: center;
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(219, 155, 62, 0.10);
+      font-size: 13px;
+    }
+    .cmd-row:hover { background: var(--surface); }
+    .sc-input {
+      text-align: center;
+      cursor: pointer;
+      padding: 5px 8px !important;
+      font-size: 12px !important;
+      color: var(--brass) !important;
+      width: 100%;
+    }
+    .sc-input.rec { border-color: var(--brass-hi) !important; color: var(--brass-hi) !important; }
+    .clear-sc {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 15px;
+    }
+    .clear-sc:hover { color: #ff6b6b; }
+
+    /* Macro Builder Drawer */
+    #macroDrawer {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--brass);
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .step-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      padding: 4px 10px;
+      margin: 4px 4px 0 0;
+      font-size: 12px;
+    }
+
+    fieldset {
+      border: 1px solid var(--line);
+      background: var(--bg2);
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    legend { color: var(--brass); font-size: 13px; font-weight: 600; padding: 0 6px; }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      margin-top: 10px;
+    }
+    #statusMsg { font-size: 12px; color: var(--brass); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="./logo.png" alt="ARZ Excalibur" />
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="commandsPane">Commands & Macros</button>
+      <button class="tab-btn" data-tab="generalPane">General Settings</button>
+    </div>
+  </div>
+
+  <!-- TAB 1: COMMANDS, SHORTCUTS & MACRO BUILDER (Matches Real Excalibur Commands Tab) -->
+  <div id="commandsPane" class="tab-pane active">
+    <div class="toolbar">
+      <input id="cmdSearch" type="text" placeholder="Search commands, effects, transitions, presets, macros..." />
+      <button id="toggleMacroBtn" class="btn btn-brass">+ Add User Macro</button>
+    </div>
+
+    <div id="macroDrawer">
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <input id="macroName" type="text" placeholder="Macro Name (e.g. ARZ Fast Zoom + Blur)" style="flex:1;" />
+        <select id="stepSelect">
+          <option value="scale_115">Scale * 1.15 (Punch-In)</option>
+          <option value="scale_100">Scale = 100% (Reset)</option>
+          <option value="fx_gblur">Effect: Gaussian Blur</option>
+          <option value="fx_lumetri">Effect: Lumetri Color</option>
+          <option value="fx_transform">Effect: Transform</option>
+          <option value="tr_dissolve">Transition: Cross Dissolve</option>
+          <option value="tr_dipblack">Transition: Dip to Black</option>
+          <option value="nest">Nest Selected Clips</option>
+          <option value="trim_in">Trim In to Playhead</option>
+          <option value="trim_out">Trim Out to Playhead</option>
+          <option value="wait_100">Wait 100ms</option>
+        </select>
+        <button id="addStepBtn" class="btn">+ Add Step</button>
+        <button id="saveMacroBtn" class="btn btn-brass">Save Macro</button>
+      </div>
+      <div id="macroStepsList" style="min-height:24px;"></div>
+    </div>
+
+    <div class="cmd-row" style="background:#17120D; font-weight:600; color:var(--muted); border-bottom:1px solid var(--line);">
+      <span>Show</span>
+      <span>Command / Effect / Preset</span>
+      <span style="text-align:center;">Direct Shortcut</span>
+      <span></span>
+    </div>
+    <div id="cmdList" class="cmd-list"></div>
+  </div>
+
+  <!-- TAB 2: GENERAL SETTINGS (Matches Real Excalibur General Tab, Zero License Bloat) -->
+  <div id="generalPane" class="tab-pane">
+    <fieldset>
+      <legend>Primary Invocation Shortcut</legend>
+      <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:8px;">
+        Click below and press the key combination to open ARZ-Excalibur anywhere inside Premiere Pro:
+      </label>
+      <input id="mainShortcutBox" type="text" readonly class="sc-input" style="font-size:15px !important; padding:10px !important;" />
+    </fieldset>
+
+    <fieldset>
+      <legend>Search Bar Layout & Live Preview</legend>
+      <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13.5px;">
+        <input id="gridModeToggle" type="checkbox" checked />
+        <span>Enable 3-Column Square Cards Grid with 60-FPS Live Effect Preview (Disable for compact classic list)</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Runtime Lifecycle</legend>
+      <div style="font-size:12.5px; color:var(--muted); line-height:1.6;">
+        • Starts silently only when Adobe Premiere Pro opens, and exits automatically when Premiere closes.<br/>
+        • Shortcuts work regardless of active panel or text focus inside Premiere Pro.
+      </div>
+    </fieldset>
+  </div>
+
+  <div class="footer">
+    <div id="statusMsg">Ready</div>
+    <div style="display:flex; gap:8px;">
+      <button id="saveAllBtn" class="btn btn-brass">Save Settings</button>
+      <button id="closeBtn" class="btn">Close</button>
+    </div>
+  </div>
+
+  <script>
+    const BRIDGE = "http://127.0.0.1:49872";
+    let appState = {
+      settings: { toggle_shortcut: "Alt+Space", vk: 32, ctrl: false, alt: true, shift: false, grid_mode: true, hidden_ids: [], command_shortcuts: {} },
+      catalog: [],
+      macros: []
+    };
+    let activeRecInput = null;
+    let draftSteps = [];
+
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.tab).classList.add("active");
+      });
+    });
+
+    function setStatus(msg, ok = true) {
+      const el = document.getElementById("statusMsg");
+      el.style.color = ok ? "#DB9B3E" : "#ff6b6b";
+      el.textContent = msg;
+    }
+
+    function renderCatalog() {
+      const q = document.getElementById("cmdSearch").value.trim().toLowerCase();
+      const listEl = document.getElementById("cmdList");
+      listEl.innerHTML = "";
+      const hiddenSet = new Set(appState.settings.hidden_ids || []);
+      const scMap = appState.settings.command_shortcuts || {};
+
+      appState.catalog.forEach(item => {
+        if (q && !item.name.toLowerCase().includes(q)) return;
+        const row = document.createElement("div");
+        row.className = "cmd-row";
+
+        const chk = document.createElement("input");
+        chk.type = "checkbox";
+        chk.checked = !hiddenSet.has(item.id);
+        chk.addEventListener("change", () => {
+          if (chk.checked) hiddenSet.delete(item.id);
+          else hiddenSet.add(item.id);
+          appState.settings.hidden_ids = Array.from(hiddenSet);
+          pushSettings();
+        });
+
+        const title = document.createElement("div");
+        const isMacro = item.id.startsWith("macro.");
+        title.textContent = item.name + (isMacro ? "  [User Macro]" : "");
+
+        const scBox = document.createElement("input");
+        scBox.type = "text";
+        scBox.readOnly = true;
+        scBox.className = "sc-input";
+        scBox.value = scMap[item.id] || "Click to bind";
+        scBox.addEventListener("click", () => {
+          if (activeRecInput) activeRecInput.el.classList.remove("rec");
+          scBox.classList.add("rec");
+          scBox.value = "Press keys...";
+          activeRecInput = { kind: "cmd", id: item.id, el: scBox };
+        });
+
+        const clr = document.createElement("button");
+        clr.className = "clear-sc";
+        clr.textContent = isMacro ? "🗑" : "×";
+        clr.title = isMacro ? "Delete Macro" : "Clear Shortcut";
+        clr.addEventListener("click", async () => {
+          if (isMacro) {
+            appState.macros = appState.macros.filter(m => m.id !== item.id);
+            appState.catalog = appState.catalog.filter(c => c.id !== item.id);
+            await fetch(BRIDGE + "/macros", { method: "POST", body: JSON.stringify(appState.macros) });
+            renderCatalog();
+            setStatus("Macro deleted");
+          } else {
+            delete appState.settings.command_shortcuts[item.id];
+            scBox.value = "Click to bind";
+            pushSettings();
+          }
+        });
+
+        row.append(chk, title, scBox, clr);
+        listEl.appendChild(row);
+      });
+    }
+
+    async function pushSettings() {
+      appState.settings.grid_mode = document.getElementById("gridModeToggle").checked;
+      try {
+        const r = await fetch(BRIDGE + "/settings", {
+          method: "POST",
+          body: JSON.stringify(appState.settings)
+        });
+        if (r.ok) setStatus("Settings synced live with ARZ-Excalibur!");
+      } catch (_e) {
+        setStatus("Engine offline — will sync when Premiere starts bridge", false);
+      }
+    }
+
+    document.getElementById("mainShortcutBox").addEventListener("click", (e) => {
+      if (activeRecInput) activeRecInput.el.classList.remove("rec");
+      e.target.classList.add("rec");
+      e.target.value = "Press keys...";
+      activeRecInput = { kind: "main", el: e.target };
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (!activeRecInput) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+      if (e.key === "Escape") {
+        activeRecInput.el.classList.remove("rec");
+        activeRecInput = null;
+        renderCatalog();
+        document.getElementById("mainShortcutBox").value = appState.settings.toggle_shortcut;
+        return;
+      }
+      const parts = [];
+      if (e.ctrlKey) parts.push("Ctrl");
+      if (e.altKey) parts.push("Alt");
+      if (e.shiftKey) parts.push("Shift");
+      const k = e.code === "Space" ? "Space" : (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+      parts.push(k);
+      const combo = parts.join("+");
+
+      activeRecInput.el.classList.remove("rec");
+      activeRecInput.el.value = combo;
+      if (activeRecInput.kind === "main") {
+        appState.settings.toggle_shortcut = combo;
+      } else {
+        if (!appState.settings.command_shortcuts) appState.settings.command_shortcuts = {};
+        appState.settings.command_shortcuts[activeRecInput.id] = combo;
+      }
+      activeRecInput = null;
+      pushSettings();
+    });
+
+    document.getElementById("cmdSearch").addEventListener("input", renderCatalog);
+    document.getElementById("gridModeToggle").addEventListener("change", pushSettings);
+    document.getElementById("saveAllBtn").addEventListener("click", pushSettings);
+
+    document.getElementById("toggleMacroBtn").addEventListener("click", () => {
+      const d = document.getElementById("macroDrawer");
+      d.style.display = d.style.display === "block" ? "none" : "block";
+    });
+
+    function buildStepPayload(code) {
+      switch (code) {
+        case "scale_115": return { label: "Scale *1.15", step: { step_type: "premiere", action: "set_clip_property", component: "Motion", param: "Scale", op: "mul", value: 1.15, axis: null } };
+        case "scale_100": return { label: "Scale = 100", step: { step_type: "premiere", action: "set_clip_property", component: "Motion", param: "Scale", op: "set", value: 100.0, axis: null } };
+        case "fx_gblur": return { label: "Gaussian Blur", step: { step_type: "premiere", action: "apply_effect", name: "Gaussian Blur", is_video: true } };
+        case "fx_lumetri": return { label: "Lumetri Color", step: { step_type: "premiere", action: "apply_effect", name: "Lumetri Color", is_video: true } };
+        case "fx_transform": return { label: "Transform", step: { step_type: "premiere", action: "apply_effect", name: "Transform", is_video: true } };
+        case "tr_dissolve": return { label: "Cross Dissolve", step: { step_type: "premiere", action: "apply_transition", name: "Cross Dissolve", is_video: true } };
+        case "tr_dipblack": return { label: "Dip to Black", step: { step_type: "premiere", action: "apply_transition", name: "Dip to Black", is_video: true } };
+        case "nest": return { label: "Nest Clips", step: { step_type: "premiere", action: "nest_clips", sequence_name: "ARZ Nest", individual: false } };
+        case "trim_in": return { label: "Trim In", step: { step_type: "premiere", action: "trim_to_playhead", trim_in: true } };
+        case "trim_out": return { label: "Trim Out", step: { step_type: "premiere", action: "trim_to_playhead", trim_in: false } };
+        default: return { label: "Wait 100ms", step: { step_type: "wait_ms", ms: 100 } };
+      }
+    }
+
+    function renderDraftSteps() {
+      const box = document.getElementById("macroStepsList");
+      box.innerHTML = "";
+      draftSteps.forEach((s, i) => {
+        const chip = document.createElement("span");
+        chip.className = "step-chip";
+        chip.textContent = (i + 1) + ". " + s.label;
+        box.appendChild(chip);
+      });
+    }
+
+    document.getElementById("addStepBtn").addEventListener("click", () => {
+      draftSteps.push(buildStepPayload(document.getElementById("stepSelect").value));
+      renderDraftSteps();
+    });
+
+    document.getElementById("saveMacroBtn").addEventListener("click", async () => {
+      const name = document.getElementById("macroName").value.trim();
+      if (!name || !draftSteps.length) {
+        setStatus("Enter a macro name and add at least 1 step", false);
+        return;
+      }
+      const id = "macro." + Date.now();
+      const newMacro = { id, name, shortcut_vk: null, ctrl: false, alt: false, shift: false, steps: draftSteps.map(d => d.step) };
+      appState.macros.push(newMacro);
+      appState.catalog.unshift({ id, name, category: "UserMacro", has_submenu: false, enabled: true });
+      await fetch(BRIDGE + "/macros", { method: "POST", body: JSON.stringify(appState.macros) });
+      draftSteps = [];
+      document.getElementById("macroName").value = "";
+      renderDraftSteps();
+      document.getElementById("macroDrawer").style.display = "none";
+      renderCatalog();
+      setStatus("Saved User Macro: " + name);
+    });
+
+    document.getElementById("closeBtn").addEventListener("click", () => {
+      if (window.__adobe_cep__) window.__adobe_cep__.closeExtension();
+    });
+
+    fetch(BRIDGE + "/state")
+      .then(r => r.json())
+      .then(d => {
+        if (d.settings) appState.settings = d.settings;
+        if (d.catalog) appState.catalog = d.catalog;
+        if (d.macros) appState.macros = d.macros;
+        document.getElementById("mainShortcutBox").value = appState.settings.toggle_shortcut || "Alt+Space";
+        document.getElementById("gridModeToggle").checked = appState.settings.grid_mode !== false;
+        renderCatalog();
+      })
+      .catch(() => {
+        document.getElementById("mainShortcutBox").value = "Alt+Space";
+        setStatus("Waiting for ARZ-Excalibur engine...", false);
+      });
+  </script>
+</body>
+</html>

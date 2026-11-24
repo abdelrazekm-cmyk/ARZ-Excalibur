@@ -1,0 +1,7 @@
+# Ignore heavy Rust intermediate compiler scratch folders & debug symbols,
+# while explicitly TRACKING the final compiled `.exe` binaries as requested!
+/target/*
+!/target/release/
+/target/release/*
+!/target/release/arz-excalibur.exe
+*.pdb

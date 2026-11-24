@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.arz.excalibur.bridge" ExtensionBundleVersion="0.4.0" ExtensionBundleName="ARZ-Excalibur">
+    <ExtensionList>
+        <Extension Id="com.arz.excalibur.bridge" Version="0.4.0"/>
+        <Extension Id="com.arz.excalibur.settings" Version="0.4.0"/>
+    </ExtensionList>
+    <ExecutionEnvironment>
+        <HostList>
+            <Host Name="PPRO" Version="[14.0,99.9]"/>
+        </HostList>
+        <LocaleList>
+            <Locale Code="All"/>
+        </LocaleList>
+        <RequiredRuntimeList>
+            <RequiredRuntime Name="CSXS" Version="9.0"/>
+        </RequiredRuntimeList>
+    </ExecutionEnvironment>
+    <DispatchInfoList>
+        <!-- Auto-starts when Premiere Pro opens; spawns & manages bin/ARZ-Excalibur.exe -->
+        <Extension Id="com.arz.excalibur.bridge">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./client/bridge.html</MainPath>
+                    <ScriptPath>./host/arz_premiere.jsx</ScriptPath>
+                    <CEFCommandLine>
+                        <Parameter>--enable-nodejs</Parameter>
+                        <Parameter>--mixed-context</Parameter>
+                    </CEFCommandLine>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>false</AutoVisible>
+                    <StartOn>
+                        <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
+                    </StartOn>
+                </Lifecycle>
+                <UI>
+                    <Type>Custom</Type>
+                    <Geometry>
+                        <Size>
+                            <Height>10</Height>
+                            <Width>10</Width>
+                        </Size>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+
+        <!-- Full 2-Tab Premiere Pro Settings & Macro Builder: Window > Extensions > ARZ-Excalibur Settings -->
+        <Extension Id="com.arz.excalibur.settings">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./client/settings.html</MainPath>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>true</AutoVisible>
+                </Lifecycle>
+                <UI>
+                    <Type>ModalDialog</Type>
+                    <Menu>ARZ-Excalibur Settings</Menu>
+                    <Geometry>
+                        <Size>
+                            <Height>620</Height>
+                            <Width>760</Width>
+                        </Size>
+                        <MinSize>
+                            <Height>540</Height>
+                            <Width>680</Width>
+                        </MinSize>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+    </DispatchInfoList>
+</ExtensionManifest>

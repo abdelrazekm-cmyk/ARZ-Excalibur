@@ -1,0 +1,22 @@
+[package]
+name = "arz-excalibur"
+version = "0.1.0"
+edition = "2021"
+description = "ARZ-Excalibur — Ultra-fast native Spotlight command palette & macro engine for video editing"
+publish = false
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+quick-xml = "0.37"
+notify = "7.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
