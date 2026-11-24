@@ -87,21 +87,19 @@ pub struct BridgeState {
 
 pub type SharedBridgeState = Arc<Mutex<BridgeState>>;
 
-pub fn start_loopback_bridge_server() -> SharedBridgeState {
+pub fn try_start_loopback_bridge_server() -> Option<SharedBridgeState> {
+    let listener = TcpListener::bind(BRIDGE_ADDR).ok()?;
     let state: SharedBridgeState = Arc::new(Mutex::new(BridgeState::default()));
     let state_clone = Arc::clone(&state);
 
     thread::spawn(move || {
-        let Ok(listener) = TcpListener::bind(BRIDGE_ADDR) else {
-            return;
-        };
         for stream in listener.incoming().flatten() {
             let state_req = Arc::clone(&state_clone);
             let _ = handle_http_conn(stream, state_req);
         }
     });
 
-    state
+    Some(state)
 }
 
 fn save_macros_file(macros: &[UserMacro]) -> Result<(), String> {

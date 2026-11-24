@@ -51,17 +51,20 @@ pub fn last_premiere_hwnd() -> isize {
 mod win_impl {
     use super::*;
     use std::thread;
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::core::w;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU,
-        VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
+        GetAsyncKeyState, SendInput, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+        KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
+        VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMenu, GetMenuItemCount,
-        GetMenuItemID, GetMenuStringW, GetMessageW, GetSubMenu, GetWindowTextW, PostMessageW,
-        SetForegroundWindow, SetWindowsHookExW, TranslateMessage, HMENU, KBDLLHOOKSTRUCT,
-        MF_BYPOSITION, MSG, WH_KEYBOARD_LL, WM_COMMAND, WM_KEYDOWN, WM_SYSKEYDOWN,
+        CallNextHookEx, DispatchMessageW, FindWindowW, GetForegroundWindow, GetMenu,
+        GetMenuItemCount, GetMenuItemID, GetMenuStringW, GetMessageW, GetSubMenu, GetSystemMetrics,
+        GetWindowRect, GetWindowTextW, PostMessageW, SetForegroundWindow, SetWindowPos,
+        SetWindowsHookExW, ShowWindow, TranslateMessage, HMENU, HWND_TOPMOST, KBDLLHOOKSTRUCT,
+        MF_BYPOSITION, MSG, SM_CXSCREEN, SM_CYSCREEN, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW,
+        WH_KEYBOARD_LL, WM_COMMAND, WM_KEYDOWN, WM_SYSKEYDOWN,
     };
 
     pub fn window_title_of(hwnd: HWND) -> String {
@@ -198,6 +201,53 @@ mod win_impl {
         rx
     }
 
+    pub fn hide_arz_window() {
+        unsafe {
+            if let Ok(hwnd) = FindWindowW(None, w!("ARZ-Excalibur")) {
+                if !hwnd.0.is_null() {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+        }
+    }
+
+    pub fn show_and_center_arz_window(width: i32, height: i32) {
+        unsafe {
+            let Ok(hwnd) = FindWindowW(None, w!("ARZ-Excalibur")) else {
+                return;
+            };
+            if hwnd.0.is_null() {
+                return;
+            }
+
+            let mut target_x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
+            let mut target_y = (GetSystemMetrics(SM_CYSCREEN) - height) / 3;
+
+            let p_raw = LAST_PREMIERE_HWND.load(Ordering::Relaxed);
+            if p_raw != 0 {
+                let p_hwnd = HWND(p_raw as *mut core::ffi::c_void);
+                let mut r = RECT::default();
+                if GetWindowRect(p_hwnd, &mut r).is_ok() && (r.right - r.left) > 200 {
+                    target_x = r.left + ((r.right - r.left) - width) / 2;
+                    target_y = r.top + ((r.bottom - r.top) - height) / 3;
+                }
+            }
+
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                target_x,
+                target_y,
+                width,
+                height,
+                SWP_SHOWWINDOW,
+            );
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(hwnd);
+        }
+    }
+
     pub fn focus_premiere_window() -> Option<HWND> {
         let raw = LAST_PREMIERE_HWND.load(Ordering::Relaxed);
         if raw == 0 {
@@ -312,8 +362,8 @@ mod win_impl {
 
 #[cfg(windows)]
 pub use win_impl::{
-    detect_foreground_host, focus_premiere_window, send_key_chord, start_hotkey_listener,
-    trigger_premiere_menu,
+    detect_foreground_host, focus_premiere_window, hide_arz_window, send_key_chord,
+    show_and_center_arz_window, start_hotkey_listener, trigger_premiere_menu,
 };
 
 #[cfg(not(windows))]

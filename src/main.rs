@@ -12,7 +12,7 @@ mod search;
 mod settings;
 mod win32_input;
 
-use bridge::{start_loopback_bridge_server, PremiereCommand, SharedBridgeState};
+use bridge::{try_start_loopback_bridge_server, PremiereCommand, SharedBridgeState};
 use catalog::{build_premiere_catalog, ActionItem, CommandPayload};
 use eframe::egui::{self, Color32, Rounding, Stroke, TextureHandle, Vec2};
 use macro_engine::{execute_user_macro_async, load_user_macros, UserMacro};
@@ -29,12 +29,14 @@ use std::sync::{
 };
 use std::time::Duration;
 use win32_input::{
-    detect_foreground_host, focus_premiere_window, last_premiere_hwnd,
-    set_shortcut_recording_mode, set_toggle_shortcut_binding, start_hotkey_listener,
-    trigger_premiere_menu, HotkeyEvent,
+    detect_foreground_host, focus_premiere_window, hide_arz_window, last_premiere_hwnd,
+    set_shortcut_recording_mode, set_toggle_shortcut_binding, show_and_center_arz_window,
+    start_hotkey_listener, trigger_premiere_menu, HotkeyEvent,
 };
 
 const GRID_COLS: usize = 3;
+const BAR_W: f32 = 500.0;
+const BAR_EMPTY_H: f32 = 84.0;
 
 struct ArzExcaliburApp {
     query: String,
@@ -78,7 +80,11 @@ fn try_load_png_texture(ctx: &egui::Context, name: &str, path: &Path) -> Option<
 }
 
 impl ArzExcaliburApp {
-    fn new(cc: &eframe::CreationContext<'_>, start_hidden: bool) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        bridge: SharedBridgeState,
+        start_hidden: bool,
+    ) -> Self {
         // Load crisp native Windows Segoe UI font so typography renders razor-sharp
         if let Ok(font_bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
             let mut fonts = egui::FontDefinitions::default();
@@ -112,7 +118,6 @@ impl ArzExcaliburApp {
             app_settings.alt,
             app_settings.shift,
         );
-        let bridge = start_loopback_bridge_server();
         let hotkey_rx = start_hotkey_listener();
 
         let mut preset_reload_rx = None;
@@ -208,6 +213,7 @@ impl ArzExcaliburApp {
         self.input_secondary.clear();
         self.selected_idx = 0;
         self.visible = false;
+        hide_arz_window();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         let _ = focus_premiere_window();
     }
@@ -415,8 +421,9 @@ impl eframe::App for ArzExcaliburApp {
                                 output_path: self.preview_frame_path.to_string_lossy().replace('\\', "/"),
                             });
                         }
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(BAR_W, BAR_EMPTY_H)));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        show_and_center_arz_window(BAR_W as i32, BAR_EMPTY_H as i32);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         if !window_title.is_empty() {
                             self.status_line = format!("Target [0x{premiere_hwnd:x}]: {window_title}");
@@ -505,10 +512,17 @@ impl eframe::App for ArzExcaliburApp {
             }
         }
 
+        // STRICT BACKGROUND SILENT MODE: when hidden, keep Win32 HWND hidden and skip ALL UI layout/focus!
+        if !self.visible {
+            hide_arz_window();
+            ctx.request_repaint_after(Duration::from_millis(75));
+            return;
+        }
+
         let panel_frame = egui::Frame::none()
-            .fill(Color32::from_rgb(17, 14, 10)) // #110E0A Noir Espresso
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(92, 67, 32))) // Warm Brass border
-            .inner_margin(egui::Margin::symmetric(14.0, 10.0));
+            .fill(Color32::from_rgb(12, 10, 8)) // Deep Noir Obsidian
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(82, 62, 34))) // Subtle 1px Warm Brass hairline border
+            .inner_margin(egui::Margin::symmetric(18.0, 0.0));
 
         egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
             if let Some(sub_item) = self.active_submenu.clone() {
@@ -608,37 +622,56 @@ impl eframe::App for ArzExcaliburApp {
 
                 let has_query = !self.query.trim().is_empty();
 
-                // When typing, keep focus in the search input unless arrow keys navigate the grid
+                // Minimalist 500x84 Bar Mode when empty: dead-center optical watermark + vertically centered input cursor!
+                if !has_query {
+                    ctx.request_repaint_after(Duration::from_millis(60));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(BAR_W, BAR_EMPTY_H)));
+
+                    let full_rect = ui.max_rect();
+                    if let Some(tex) = &self.watermark_tex {
+                        let aspect = tex.size_vec2().x / tex.size_vec2().y.max(1.0);
+                        let wm_h = 60.0_f32; // Leaves crisp 12px breathing room top & bottom inside 84px bar
+                        let wm_w = wm_h * aspect;
+                        // Slight -3px optical lift aligns "ARZ Excalibur" text & sword axis dead-center vertically
+                        let wm_center = full_rect.center() + Vec2::new(0.0, -3.0);
+                        let img_rect = egui::Rect::from_center_size(wm_center, Vec2::new(wm_w, wm_h));
+                        ui.painter().image(
+                            tex.id(),
+                            img_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::from_rgba_unmultiplied(218, 182, 132, 74),
+                        );
+                    }
+
+                    // Vertically centered single-line input box across the middle of the 84px bar
+                    let input_rect = egui::Rect::from_center_size(
+                        full_rect.center(),
+                        Vec2::new(full_rect.width(), 32.0),
+                    );
+                    let search_resp = ui.put(
+                        input_rect,
+                        egui::TextEdit::singleline(&mut self.query)
+                            .frame(false)
+                            .font(egui::FontId::proportional(22.0))
+                            .text_color(Color32::from_rgb(244, 238, 230))
+                            .lock_focus(true)
+                            .desired_width(f32::INFINITY),
+                    );
+                    search_resp.request_focus();
+                    return;
+                }
+
+                ui.add_space(12.0);
                 let search_resp = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
                         .frame(false)
-                        .font(egui::FontId::proportional(20.0))
+                        .font(egui::FontId::proportional(21.0))
                         .text_color(Color32::from_rgb(244, 238, 230))
                         .lock_focus(true)
                         .desired_width(f32::INFINITY),
                 );
                 search_resp.request_focus();
-
-                // Minimalist 64px Bar Mode when empty (with embedded Flow ARZ Excalibur gauntlet-sword watermark!)
-                if !has_query {
-                    ctx.request_repaint_after(Duration::from_millis(60));
-                    if let Some(tex) = &self.watermark_tex {
-                        let aspect = tex.size_vec2().x / tex.size_vec2().y.max(1.0);
-                        let h = 44.0_f32;
-                        let img_rect = egui::Rect::from_center_size(
-                            search_resp.rect.center(),
-                            Vec2::new(h * aspect, h),
-                        );
-                        ui.painter().image(
-                            tex.id(),
-                            img_rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::from_rgba_unmultiplied(219, 175, 112, 72), // Subtle Noir & Brass watermark tint
-                        );
-                    }
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, 64.0)));
-                    return;
-                }
+                ui.add_space(6.0);
 
                 // Hot-reload fresh Premiere playhead frame as soon as `exportFramePNG` writes it!
                 if let Some(updated_bank) = PreviewFrameBank::try_load_from_disk(
@@ -853,23 +886,38 @@ fn load_window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
-    let start_hidden = std::env::args().any(|a| a == "--managed-by-premiere" || a == "--hidden");
+    // Single-instance check: if another ARZ-Excalibur background daemon is already listening on 127.0.0.1:49872, exit cleanly!
+    let Some(bridge) = try_start_loopback_bridge_server() else {
+        return Ok(());
+    };
+
+    // Start hidden in the background unless `--show` is explicitly requested
+    let show_immediately = std::env::args().any(|a| a == "--show");
+    let start_hidden = !show_immediately;
+
+    let mut vp = egui::ViewportBuilder::default()
+        .with_title("ARZ-Excalibur")
+        .with_icon(load_window_icon())
+        .with_inner_size([BAR_W, BAR_EMPTY_H])
+        .with_decorations(false)
+        .with_taskbar(false)
+        .with_visible(!start_hidden)
+        .with_always_on_top();
+
+    if start_hidden {
+        // Park off-screen during initial GL context creation so zero frame-0 flicker ever occurs!
+        vp = vp.with_position([-10000.0, -10000.0]);
+    }
+
     let options = eframe::NativeOptions {
-        centered: true,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("ARZ-Excalibur")
-            .with_icon(load_window_icon())
-            .with_inner_size([480.0, 64.0])
-            .with_decorations(false)
-            .with_taskbar(false)
-            .with_visible(!start_hidden)
-            .with_always_on_top(),
+        centered: !start_hidden,
+        viewport: vp,
         ..Default::default()
     };
     eframe::run_native(
         "ARZ-Excalibur",
         options,
-        Box::new(move |cc| Ok(Box::new(ArzExcaliburApp::new(cc, start_hidden)))),
+        Box::new(move |cc| Ok(Box::new(ArzExcaliburApp::new(cc, bridge, start_hidden)))),
     )
 }
 
