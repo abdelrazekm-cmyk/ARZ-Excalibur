@@ -31,6 +31,8 @@
                     <AutoVisible>false</AutoVisible>
                     <StartOn>
                         <Event>com.adobe.csxs.events.ApplicationInitialized</Event>
+                        <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+                        <Event>com.adobe.csxs.events.DocumentAfterActivate</Event>
                     </StartOn>
                 </Lifecycle>
                 <UI>
@@ -50,6 +52,10 @@
             <DispatchInfo>
                 <Resources>
                     <MainPath>./client/settings.html</MainPath>
+                    <CEFCommandLine>
+                        <Parameter>--enable-nodejs</Parameter>
+                        <Parameter>--mixed-context</Parameter>
+                    </CEFCommandLine>
                 </Resources>
                 <Lifecycle>
                     <AutoVisible>true</AutoVisible>

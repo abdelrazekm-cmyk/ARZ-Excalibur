@@ -211,7 +211,10 @@
       <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:8px;">
         Click below and press the key combination to open ARZ-Excalibur anywhere inside Premiere Pro:
       </label>
-      <input id="mainShortcutBox" type="text" readonly class="sc-input" style="font-size:15px !important; padding:10px !important;" />
+      <div style="display:flex; gap:10px; align-items:center;">
+        <input id="mainShortcutBox" type="text" readonly class="sc-input" style="font-size:15px !important; padding:10px !important; flex:1;" />
+        <button id="testOpenBtn" class="btn btn-brass" style="padding:10px 16px;">Test Open Search Bar</button>
+      </div>
     </fieldset>
 
     <fieldset>
@@ -270,9 +273,11 @@
       listEl.innerHTML = "";
       const hiddenSet = new Set(appState.settings.hidden_ids || []);
       const scMap = appState.settings.command_shortcuts || {};
+      const matched = appState.catalog.filter(item => !q || item.name.toLowerCase().includes(q));
+      const MAX_VISIBLE = 200;
+      const frag = document.createDocumentFragment();
 
-      appState.catalog.forEach(item => {
-        if (q && !item.name.toLowerCase().includes(q)) return;
+      matched.slice(0, MAX_VISIBLE).forEach(item => {
         const row = document.createElement("div");
         row.className = "cmd-row";
 
@@ -321,8 +326,15 @@
         });
 
         row.append(chk, title, scBox, clr);
-        listEl.appendChild(row);
+        frag.appendChild(row);
       });
+      if (matched.length > MAX_VISIBLE) {
+        const more = document.createElement("div");
+        more.style.cssText = "padding:10px 14px; color:var(--muted); font-size:12px; text-align:center;";
+        more.textContent = `Showing ${MAX_VISIBLE} of ${matched.length} items — type in Search above to filter all ${appState.catalog.length} commands & presets instantly.`;
+        frag.appendChild(more);
+      }
+      listEl.appendChild(frag);
     }
 
     async function pushSettings() {
@@ -330,12 +342,36 @@
       try {
         const r = await fetch(BRIDGE + "/settings", {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(appState.settings)
         });
-        if (r.ok) setStatus("Settings synced live with ARZ-Excalibur!");
+        const data = await r.json();
+        if (r.ok && data.ok !== false) {
+          setStatus("Settings synced live! Active shortcut: " + appState.settings.toggle_shortcut);
+        } else {
+          setStatus("Failed to save settings: " + (data.error || "Unknown error"), false);
+        }
       } catch (_e) {
-        setStatus("Engine offline — will sync when Premiere starts bridge", false);
+        ensureBridgeStarted();
+        setStatus("Starting ARZ-Excalibur engine — try Save again in 1 second...", false);
       }
+    }
+
+    function ensureBridgeStarted() {
+      try {
+        if (window.__adobe_cep__) {
+          window.__adobe_cep__.requestOpenExtension("com.arz.excalibur.bridge", "");
+        }
+        if (typeof require === "function") {
+          const path = require("path");
+          const cp = require("child_process");
+          const htmlFile = decodeURIComponent(window.location.pathname).replace(/^\/([A-Za-z]:)/, "$1");
+          const binDir = path.resolve(path.dirname(htmlFile), "..", "bin");
+          const exePath = path.join(binDir, "ARZ-Excalibur.exe");
+          const p = cp.spawn(exePath, ["--managed-by-premiere"], { cwd: binDir, windowsHide: true, stdio: "ignore" });
+          p.unref();
+        }
+      } catch (_e) {}
     }
 
     document.getElementById("mainShortcutBox").addEventListener("click", (e) => {
@@ -437,24 +473,45 @@
       setStatus("Saved User Macro: " + name);
     });
 
+    document.getElementById("testOpenBtn").addEventListener("click", async () => {
+      try {
+        await fetch(BRIDGE + "/open", { method: "POST" });
+        if (window.__adobe_cep__) window.__adobe_cep__.closeExtension();
+      } catch (_e) {
+        ensureBridgeStarted();
+        setStatus("Starting engine — click Test Open again in 1 second...", false);
+      }
+    });
+
     document.getElementById("closeBtn").addEventListener("click", () => {
       if (window.__adobe_cep__) window.__adobe_cep__.closeExtension();
     });
 
-    fetch(BRIDGE + "/state")
-      .then(r => r.json())
-      .then(d => {
-        if (d.settings) appState.settings = d.settings;
-        if (d.catalog) appState.catalog = d.catalog;
-        if (d.macros) appState.macros = d.macros;
-        document.getElementById("mainShortcutBox").value = appState.settings.toggle_shortcut || "Alt+Space";
-        document.getElementById("gridModeToggle").checked = appState.settings.grid_mode !== false;
-        renderCatalog();
-      })
-      .catch(() => {
-        document.getElementById("mainShortcutBox").value = "Alt+Space";
-        setStatus("Waiting for ARZ-Excalibur engine...", false);
-      });
+    function loadInitialState(attempt = 1) {
+      fetch(BRIDGE + "/state")
+        .then(r => r.json())
+        .then(d => {
+          if (d.settings) appState.settings = d.settings;
+          if (d.catalog) appState.catalog = d.catalog;
+          if (d.macros) appState.macros = d.macros;
+          const sc = appState.settings.toggle_shortcut || "Alt+Space";
+          document.getElementById("mainShortcutBox").value = sc;
+          document.getElementById("gridModeToggle").checked = appState.settings.grid_mode !== false;
+          renderCatalog();
+          setStatus("Engine Online • Active Shortcut: " + sc);
+        })
+        .catch(() => {
+          ensureBridgeStarted();
+          document.getElementById("mainShortcutBox").value = "Alt+Space";
+          if (attempt < 4) {
+            setStatus("Starting ARZ-Excalibur engine...", true);
+            setTimeout(() => loadInitialState(attempt + 1), 600);
+          } else {
+            setStatus("Waiting for ARZ-Excalibur engine...", false);
+          }
+        });
+    }
+    loadInitialState();
   </script>
 </body>
 </html>

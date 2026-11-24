@@ -56,7 +56,14 @@ $.arzExcalibur = (function () {
                             } else {
                                 var cur = prop.getValue();
                                 if (cur instanceof Array && typeof cmd.axis === "number") {
-                                    cur[cmd.axis] = applyMath(Number(cur[cmd.axis]), cmd.op, Number(cmd.value));
+                                    var frameDim = cmd.axis === 0 ? Number(seq.frameSizeHorizontal) : Number(seq.frameSizeVertical);
+                                    if (frameDim > 0 && (cmd.param === "Position" || cmd.param === "Anchor Point")) {
+                                        var curPx = Number(cur[cmd.axis]) * frameDim;
+                                        var nextPx = applyMath(curPx, cmd.op, Number(cmd.value));
+                                        cur[cmd.axis] = nextPx / frameDim;
+                                    } else {
+                                        cur[cmd.axis] = applyMath(Number(cur[cmd.axis]), cmd.op, Number(cmd.value));
+                                    }
                                     prop.setValue(cur, true);
                                 } else {
                                     var nextVal = applyMath(Number(cur), cmd.op, Number(cmd.value));

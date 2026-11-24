@@ -42,9 +42,12 @@ pub struct UserMacro {
 }
 
 pub fn load_user_macros(path: &Path) -> Vec<UserMacro> {
-    let Ok(raw) = fs::read_to_string(path) else {
+    let raw = fs::read_to_string(crate::settings::macros_file_path())
+        .or_else(|_| fs::read_to_string(path))
+        .unwrap_or_default();
+    if raw.trim().is_empty() {
         return Vec::new();
-    };
+    }
     serde_json::from_str::<Vec<UserMacro>>(&raw).unwrap_or_default()
 }
 

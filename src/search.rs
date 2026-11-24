@@ -106,6 +106,7 @@ impl CommandEntry {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn search_commands<'a>(catalog: &'a [CommandEntry], query: &str) -> Vec<&'a CommandEntry> {
     let mut scored: Vec<(u32, &'a CommandEntry)> = catalog
         .iter()

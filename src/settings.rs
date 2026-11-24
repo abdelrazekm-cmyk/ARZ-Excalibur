@@ -1,9 +1,10 @@
-//! Persistent `settings.json` configuration, per-command visibility/shortcuts, & grid toggle.
+//! Persistent user configuration stored in `%APPDATA%\ARZ-Excalibur\settings.json`
+//! so plugin updates never wipe custom shortcuts, hidden commands, or layout preferences.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn default_true() -> bool {
     true
@@ -43,23 +44,33 @@ impl Default for AppSettings {
     }
 }
 
-pub fn settings_file_path() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("settings.json");
-            if candidate.exists() {
-                return candidate;
-            }
-        }
+pub fn user_config_dir() -> PathBuf {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let dir = PathBuf::from(appdata).join("ARZ-Excalibur");
+        let _ = fs::create_dir_all(&dir);
+        return dir;
     }
-    Path::new("settings.json").to_path_buf()
+    PathBuf::from(".")
+}
+
+pub fn settings_file_path() -> PathBuf {
+    user_config_dir().join("settings.json")
+}
+
+pub fn macros_file_path() -> PathBuf {
+    user_config_dir().join("macros.json")
 }
 
 pub fn load_settings() -> AppSettings {
     let path = settings_file_path();
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return AppSettings::default();
-    };
+    let raw = fs::read_to_string(&path)
+        .or_else(|_| fs::read_to_string("settings.json"))
+        .unwrap_or_default();
+    if raw.is_empty() {
+        let def = AppSettings::default();
+        let _ = save_settings(&def);
+        return def;
+    }
     if let Ok(mut parsed) = serde_json::from_str::<AppSettings>(&raw) {
         if let Some((vk, ctrl, alt, shift)) = parse_shortcut_str(&parsed.toggle_shortcut) {
             parsed.vk = vk;
@@ -75,12 +86,8 @@ pub fn load_settings() -> AppSettings {
 
 pub fn save_settings(settings: &AppSettings) -> Result<(), String> {
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let _ = fs::write(settings_file_path(), &json);
     let _ = fs::write("settings.json", &json);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let _ = fs::write(dir.join("settings.json"), &json);
-        }
-    }
     Ok(())
 }
 
@@ -138,6 +145,15 @@ pub fn parse_shortcut_str(s: &str) -> Option<(u16, bool, bool, bool)> {
             "space" => key_vk = Some(0x20),
             "tab" => key_vk = Some(0x09),
             "`" | "backtick" | "tilde" => key_vk = Some(0xC0),
+            "-" | "minus" => key_vk = Some(0xBD),
+            "=" | "plus" => key_vk = Some(0xBB),
+            "[" => key_vk = Some(0xDB),
+            "]" => key_vk = Some(0xDD),
+            ";" => key_vk = Some(0xBA),
+            "'" => key_vk = Some(0xDE),
+            "," => key_vk = Some(0xBC),
+            "." => key_vk = Some(0xBE),
+            "/" | "slash" => key_vk = Some(0xBF),
             _ if low.starts_with('f')
                 && low[1..]
                     .parse::<u16>()

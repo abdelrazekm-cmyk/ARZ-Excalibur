@@ -1,17 +1,20 @@
 ﻿# Bundles and installs ARZ-Excalibur strictly inside Adobe Premiere Pro's CEP extensions folder.
+# Persistent user settings live in %APPDATA%\ARZ-Excalibur so updates never wipe custom shortcuts or macros.
 # Does NOT run any 24/7 Windows background process — Premiere Pro auto-starts & auto-stops it!
 $ErrorActionPreference = "Stop"
 
 # Stop any standalone instance if running so binary updates cleanly
 Get-Process -Name "ARZ-Excalibur", "arz-excalibur" -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 200
 
 $src = Join-Path $PSScriptRoot "premiere-bridge\com.arz.excalibur.bridge"
 $dstParent = Join-Path $env:APPDATA "Adobe\CEP\extensions"
 $dst = Join-Path $dstParent "com.arz.excalibur.bridge"
 $dstBin = Join-Path $dst "bin"
 $dstAssets = Join-Path $dstBin "assets"
+$userCfgDir = Join-Path $env:APPDATA "ARZ-Excalibur"
 
-New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+New-Item -ItemType Directory -Path $dstParent, $userCfgDir -Force | Out-Null
 if (Test-Path $dst) {
     Remove-Item -Path $dst -Recurse -Force
 }
@@ -28,6 +31,10 @@ foreach ($cfg in @("settings.json", "macros.json")) {
     $cfgPath = Join-Path $PSScriptRoot $cfg
     if (Test-Path $cfgPath) {
         Copy-Item -Path $cfgPath -Destination (Join-Path $dstBin $cfg) -Force
+        $persistentTarget = Join-Path $userCfgDir $cfg
+        if (-not (Test-Path $persistentTarget)) {
+            Copy-Item -Path $cfgPath -Destination $persistentTarget -Force
+        }
     }
 }
 $wmPath = Join-Path $PSScriptRoot "assets\watermark.png"

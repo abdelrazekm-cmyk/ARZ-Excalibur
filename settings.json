@@ -3,5 +3,8 @@
   "vk": 32,
   "ctrl": false,
   "alt": true,
-  "shift": false
+  "shift": false,
+  "grid_mode": true,
+  "hidden_ids": [],
+  "command_shortcuts": {}
 }

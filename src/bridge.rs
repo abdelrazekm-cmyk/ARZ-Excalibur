@@ -4,16 +4,20 @@
 use crate::macro_engine::UserMacro;
 use crate::premiere_presets::CompiledPremierePreset;
 use crate::search::CommandEntry;
-use crate::settings::{load_settings, parse_shortcut_str, save_settings, AppSettings};
-use crate::win32_input::set_toggle_shortcut_binding;
+use crate::settings::{
+    load_settings, macros_file_path, parse_shortcut_str, save_settings, AppSettings,
+};
+use crate::win32_input::{
+    hook_pump_thread_id, request_open_palette_external, set_toggle_shortcut_binding,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const BRIDGE_ADDR: &str = "127.0.0.1:49872";
 
@@ -87,7 +91,17 @@ pub struct BridgeState {
 
 pub type SharedBridgeState = Arc<Mutex<BridgeState>>;
 
-pub fn try_start_loopback_bridge_server() -> Option<SharedBridgeState> {
+pub fn notify_running_instance_to_open() {
+    if let Ok(mut stream) = TcpStream::connect_timeout(
+        &"127.0.0.1:49872".parse().unwrap(),
+        Duration::from_millis(400),
+    ) {
+        let _ = stream.write_all(b"POST /open HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let _ = stream.flush();
+    }
+}
+
+pub fn try_start_loopback_bridge_server(managed_by_premiere: bool) -> Option<SharedBridgeState> {
     let listener = TcpListener::bind(BRIDGE_ADDR).ok()?;
     let state: SharedBridgeState = Arc::new(Mutex::new(BridgeState::default()));
     let state_clone = Arc::clone(&state);
@@ -99,29 +113,95 @@ pub fn try_start_loopback_bridge_server() -> Option<SharedBridgeState> {
         }
     });
 
+    // Independent background watchdog so shutdown works even while the UI window is SW_HIDE!
+    let state_wd = Arc::clone(&state);
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(500));
+        if let Ok(guard) = state_wd.lock() {
+            if guard.shutdown_requested {
+                std::process::exit(0);
+            }
+            if managed_by_premiere {
+                if let Some(last_ping) = guard.last_poll_instant {
+                    if last_ping.elapsed() > Duration::from_secs(5) {
+                        std::process::exit(0);
+                    }
+                }
+            }
+        }
+    });
+
     Some(state)
 }
 
 fn save_macros_file(macros: &[UserMacro]) -> Result<(), String> {
     let json = serde_json::to_string_pretty(macros).map_err(|e| e.to_string())?;
+    let _ = fs::write(macros_file_path(), &json);
     let _ = fs::write("macros.json", &json);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let _ = fs::write(dir.join("macros.json"), &json);
-        }
-    }
     Ok(())
 }
 
-fn handle_http_conn(mut stream: std::net::TcpStream, state: SharedBridgeState) -> std::io::Result<()> {
-    let mut buf = [0u8; 65536];
-    let n = stream.read(&mut buf)?;
-    if n == 0 {
+/// Reads complete HTTP/1.1 headers + full `Content-Length` body so split TCP packets from CEF `fetch()` never truncate!
+fn read_full_http_request(stream: &mut TcpStream) -> std::io::Result<(String, String)> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let mut data: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 8192];
+    let mut header_end: Option<usize> = None;
+    let mut content_len: usize = 0;
+
+    loop {
+        let n = match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(e) => return Err(e),
+        };
+        data.extend_from_slice(&chunk[..n]);
+
+        if header_end.is_none() {
+            if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let end = pos + 4;
+                header_end = Some(end);
+                let hdr_str = String::from_utf8_lossy(&data[..pos]);
+                for line in hdr_str.lines() {
+                    let low = line.to_ascii_lowercase();
+                    if let Some(rest) = low.strip_prefix("content-length:") {
+                        content_len = rest.trim().parse::<usize>().unwrap_or(0);
+                    }
+                }
+            }
+        }
+
+        if let Some(end) = header_end {
+            if data.len() >= end + content_len {
+                break;
+            }
+        }
+        if data.len() > 2 * 1024 * 1024 {
+            break;
+        }
+    }
+
+    if data.is_empty() {
+        return Ok((String::new(), String::new()));
+    }
+    if let Some(end) = header_end {
+        let headers = String::from_utf8_lossy(&data[..end - 4]);
+        let first_line = headers.lines().next().unwrap_or("").to_string();
+        let body_end = (end + content_len).min(data.len());
+        let body = String::from_utf8_lossy(&data[end..body_end]).to_string();
+        Ok((first_line, body))
+    } else {
+        let raw = String::from_utf8_lossy(&data);
+        Ok((raw.lines().next().unwrap_or("").to_string(), String::new()))
+    }
+}
+
+fn handle_http_conn(mut stream: TcpStream, state: SharedBridgeState) -> std::io::Result<()> {
+    let (first_line, body) = read_full_http_request(&mut stream)?;
+    if first_line.is_empty() {
         return Ok(());
     }
-    let req = String::from_utf8_lossy(&buf[..n]);
-    let first_line = req.lines().next().unwrap_or("");
-    let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
 
     let json_resp = if first_line.starts_with("GET /poll") {
         let mut guard = state.lock().unwrap();
@@ -146,13 +226,20 @@ fn handle_http_conn(mut stream: std::net::TcpStream, state: SharedBridgeState) -
             settings: AppSettings,
             catalog: &'a [CommandEntry],
             macros: &'a [UserMacro],
+            connected_ppro_version: &'a Option<String>,
+            hook_tid: u32,
         }
         serde_json::to_string(&FullState {
             settings,
             catalog: &guard.catalog_snapshot,
             macros: &guard.macros_snapshot,
+            connected_ppro_version: &guard.connected_ppro_version,
+            hook_tid: hook_pump_thread_id(),
         })
         .unwrap_or_else(|_| "{}".into())
+    } else if first_line.starts_with("POST /open") || first_line.starts_with("GET /open") {
+        request_open_palette_external();
+        r#"{"ok":true}"#.to_string()
     } else if first_line.starts_with("POST /settings") {
         if let Ok(mut new_cfg) = serde_json::from_str::<AppSettings>(body.trim()) {
             if let Some((vk, ctrl, alt, shift)) = parse_shortcut_str(&new_cfg.toggle_shortcut) {

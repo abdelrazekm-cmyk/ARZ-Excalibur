@@ -12,13 +12,18 @@ mod search;
 mod settings;
 mod win32_input;
 
-use bridge::{try_start_loopback_bridge_server, PremiereCommand, SharedBridgeState};
+use bridge::{
+    notify_running_instance_to_open, try_start_loopback_bridge_server, PremiereCommand,
+    SharedBridgeState,
+};
 use catalog::{build_premiere_catalog, ActionItem, CommandPayload};
 use eframe::egui::{self, Color32, Rounding, Stroke, TextureHandle, Vec2};
 use macro_engine::{execute_user_macro_async, load_user_macros, UserMacro};
 use math_expr::ValueExpr;
 use notify::{RecursiveMode, Watcher};
-use premiere_presets::{discover_latest_prfpset_file, parse_prfpset_file};
+use premiere_presets::{
+    discover_latest_prfpset_file, parse_prfpset_file, CompiledPremierePreset,
+};
 use preview_renderer::{draw_effect_preview, PreviewFrameBank};
 use settings::{format_shortcut, load_settings, parse_shortcut_str, save_settings, AppSettings};
 use std::collections::HashMap;
@@ -29,9 +34,10 @@ use std::sync::{
 };
 use std::time::Duration;
 use win32_input::{
-    detect_foreground_host, focus_premiere_window, hide_arz_window, last_premiere_hwnd,
+    detect_foreground_host, focus_premiere_window, hide_arz_window, is_palette_visible_flag,
+    last_premiere_hwnd, set_allow_any_foreground_for_test, set_palette_visible_flag,
     set_shortcut_recording_mode, set_toggle_shortcut_binding, show_and_center_arz_window,
-    start_hotkey_listener, trigger_premiere_menu, HotkeyEvent,
+    start_hotkey_listener, trigger_premiere_menu, ActiveHostApp, HotkeyEvent,
 };
 
 const GRID_COLS: usize = 3;
@@ -46,18 +52,20 @@ struct ArzExcaliburApp {
     submenu_mode_idx: usize,
     active_submenu: Option<ActionItem>,
     actions: Vec<ActionItem>,
+    loaded_presets: Vec<CompiledPremierePreset>,
     user_macros: Vec<UserMacro>,
     app_settings: AppSettings,
     bridge: SharedBridgeState,
     hotkey_rx: Receiver<HotkeyEvent>,
-    preset_reload_rx: Option<Receiver<()>>,
+    preset_loaded_rx: Receiver<Vec<CompiledPremierePreset>>,
     _preset_watcher: Option<notify::RecommendedWatcher>,
     watermark_tex: Option<TextureHandle>,
     preview_bank: PreviewFrameBank,
     preview_frame_path: PathBuf,
     custom_previews: HashMap<String, TextureHandle>,
-    managed_by_premiere: bool,
     visible: bool,
+    had_focus_since_show: bool,
+    last_requested_size: Vec2,
     status_line: String,
 }
 
@@ -112,37 +120,67 @@ impl ArzExcaliburApp {
         cc.egui_ctx.set_visuals(visuals);
 
         let app_settings = load_settings();
+        set_palette_visible_flag(!start_hidden);
         set_toggle_shortcut_binding(
             app_settings.vk,
             app_settings.ctrl,
             app_settings.alt,
             app_settings.shift,
         );
-        let hotkey_rx = start_hotkey_listener();
+        let hotkey_rx = start_hotkey_listener(
+            cc.egui_ctx.clone(),
+            BAR_W as i32,
+            BAR_EMPTY_H as i32,
+        );
 
-        let mut preset_reload_rx = None;
+        if start_hidden {
+            std::thread::spawn(|| {
+                std::thread::sleep(Duration::from_millis(80));
+                if !is_palette_visible_flag() {
+                    hide_arz_window();
+                }
+            });
+        }
+
+        // Instant <20ms startup: load built-in catalog immediately, and parse large `.prfpset` XML asynchronously!
+        let (preset_tx, preset_loaded_rx) = mpsc::channel::<Vec<CompiledPremierePreset>>();
         let mut preset_watcher = None;
-        let (presets, preset_note) = if let Some(prfp_path) = discover_latest_prfpset_file() {
-            let (tx, rx) = mpsc::channel();
+        if let Some(prfp_path) = discover_latest_prfpset_file() {
+            let tx_init = preset_tx.clone();
+            let path_init = prfp_path.clone();
+            let bridge_init = Arc::clone(&bridge);
+            let egui_init = cc.egui_ctx.clone();
+            let hidden_init = app_settings.hidden_ids.clone();
+            std::thread::spawn(move || {
+                if let Ok(list) = parse_prfpset_file(&path_init) {
+                    if let Ok(mut guard) = bridge_init.lock() {
+                        let macs = guard.macros_snapshot.clone();
+                        let mut full = build_premiere_catalog(&list, &macs);
+                        for act in &mut full {
+                            act.entry.enabled = !hidden_init.contains(&act.entry.id);
+                        }
+                        guard.catalog_snapshot = full.iter().map(|a| a.entry.clone()).collect();
+                    }
+                    let _ = tx_init.send(list);
+                    egui_init.request_repaint();
+                }
+            });
+
+            let tx_watch = preset_tx;
+            let path_watch = prfp_path.clone();
+            let egui_watch = cc.egui_ctx.clone();
             if let Ok(mut w) = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
                 if res.is_ok() {
-                    let _ = tx.send(());
+                    if let Ok(list) = parse_prfpset_file(&path_watch) {
+                        let _ = tx_watch.send(list);
+                        egui_watch.request_repaint();
+                    }
                 }
             }) {
                 let _ = w.watch(&prfp_path, RecursiveMode::NonRecursive);
-                preset_reload_rx = Some(rx);
                 preset_watcher = Some(w);
             }
-            match parse_prfpset_file(&prfp_path) {
-                Ok(list) => {
-                    let count = list.len();
-                    (list, format!("Presets: {count}"))
-                }
-                Err(_) => (Vec::new(), "Presets: default".into()),
-            }
-        } else {
-            (Vec::new(), "Presets: default".into())
-        };
+        }
 
         // Load embedded + disk Flow-generated ARZ Excalibur watermark & live clip-frame preview bank
         let watermark_tex = load_embedded_watermark(&cc.egui_ctx);
@@ -163,7 +201,7 @@ impl ArzExcaliburApp {
 
         let (_, fg_title) = detect_foreground_host();
         let user_macros = load_user_macros(Path::new("macros.json"));
-        let mut actions = build_premiere_catalog(&presets, &user_macros);
+        let mut actions = build_premiere_catalog(&[], &user_macros);
         for act in &mut actions {
             act.entry.enabled = !app_settings.hidden_ids.contains(&act.entry.id);
         }
@@ -180,22 +218,31 @@ impl ArzExcaliburApp {
             submenu_mode_idx: 0,
             active_submenu: None,
             actions,
+            loaded_presets: Vec::new(),
             user_macros,
             app_settings: app_settings.clone(),
             bridge,
             hotkey_rx,
-            preset_reload_rx,
+            preset_loaded_rx,
             _preset_watcher: preset_watcher,
             watermark_tex,
             preview_bank,
             preview_frame_path,
             custom_previews,
-            managed_by_premiere: start_hidden,
             visible: !start_hidden,
+            had_focus_since_show: false,
+            last_requested_size: Vec2::new(BAR_W, BAR_EMPTY_H),
             status_line: format!(
-                "ARZ-Excalibur ({}) | {preset_note} | {fg_title}",
+                "ARZ-Excalibur ({}) | Ready | {fg_title}",
                 app_settings.toggle_shortcut
             ),
+        }
+    }
+
+    fn set_viewport_size_if_changed(&mut self, ctx: &egui::Context, size: Vec2) {
+        if (self.last_requested_size - size).length() > 0.5 {
+            self.last_requested_size = size;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
     }
 
@@ -206,16 +253,25 @@ impl ArzExcaliburApp {
         self.status_line = format!("Applied: {summary}");
     }
 
-    fn hide_and_refocus_premiere(&mut self, ctx: &egui::Context) {
+    fn reset_and_hide(&mut self, ctx: &egui::Context, refocus_premiere: bool) {
+        set_shortcut_recording_mode(false);
         self.active_submenu = None;
         self.query.clear();
         self.input_primary.clear();
         self.input_secondary.clear();
         self.selected_idx = 0;
         self.visible = false;
+        self.had_focus_since_show = false;
+        self.last_requested_size = Vec2::ZERO;
         hide_arz_window();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        let _ = focus_premiere_window();
+        if refocus_premiere {
+            let _ = focus_premiere_window();
+        }
+    }
+
+    fn hide_and_refocus_premiere(&mut self, ctx: &egui::Context) {
+        self.reset_and_hide(ctx, true);
     }
 
     fn execute_direct_item(&mut self, item: &ActionItem, ctx: &egui::Context) {
@@ -373,68 +429,30 @@ impl ArzExcaliburApp {
 
 impl eframe::App for ArzExcaliburApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Auto-exit immediately when Premiere Pro closes (`POST /shutdown` or >4s heartbeat loss)
-        if let Ok(guard) = self.bridge.lock() {
-            if guard.shutdown_requested {
-                std::process::exit(0);
-            }
-            if self.managed_by_premiere {
-                if let Some(last_ping) = guard.last_poll_instant {
-                    if last_ping.elapsed() > Duration::from_secs(4) {
-                        std::process::exit(0);
-                    }
-                }
-            }
-        }
-        if !self.visible {
-            ctx.request_repaint_after(Duration::from_millis(80));
-        }
-
-        // Auto-reload `.prfpset` user presets whenever Premiere Pro saves changes
-        if let Some(rx) = &self.preset_reload_rx {
-            if rx.try_recv().is_ok() {
-                while rx.try_recv().is_ok() {}
-                if let Some(p) = discover_latest_prfpset_file() {
-                    if let Ok(list) = parse_prfpset_file(&p) {
-                        self.actions = build_premiere_catalog(&list, &self.user_macros);
-                        for act in &mut self.actions {
-                            act.entry.enabled = !self.app_settings.hidden_ids.contains(&act.entry.id);
-                        }
-                        if let Ok(mut guard) = self.bridge.lock() {
-                            guard.catalog_snapshot = self.actions.iter().map(|a| a.entry.clone()).collect();
-                        }
-                        self.status_line = format!("Presets refreshed: {}", list.len());
-                    }
-                }
-            }
-        }
-
-        // Poll global Win32 hotkey & shortcut recorder events
+        // 1. Drain global Win32 hotkey & wakeup events FIRST!
         while let Ok(evt) = self.hotkey_rx.try_recv() {
             match evt {
-                HotkeyEvent::TogglePalette { premiere_hwnd, window_title } => {
-                    self.visible = !self.visible;
-                    if self.visible {
-                        // Request fresh playhead frame from Premiere Pro for live effect previews!
-                        if let Ok(mut guard) = self.bridge.lock() {
-                            guard.pending_commands.push_back(PremiereCommand::CapturePreviewFrame {
-                                output_path: self.preview_frame_path.to_string_lossy().replace('\\', "/"),
-                            });
-                        }
-                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(BAR_W, BAR_EMPTY_H)));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        show_and_center_arz_window(BAR_W as i32, BAR_EMPTY_H as i32);
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                        if !window_title.is_empty() {
-                            self.status_line = format!("Target [0x{premiere_hwnd:x}]: {window_title}");
-                        }
-                    } else {
-                        self.hide_and_refocus_premiere(ctx);
+                HotkeyEvent::ShowPalette { premiere_hwnd, window_title } => {
+                    self.visible = true;
+                    self.had_focus_since_show = false;
+                    self.last_requested_size = Vec2::ZERO;
+                    if let Ok(mut guard) = self.bridge.lock() {
+                        guard.pending_commands.push_back(PremiereCommand::CapturePreviewFrame {
+                            output_path: self.preview_frame_path.to_string_lossy().replace('\\', "/"),
+                        });
                     }
+                    self.set_viewport_size_if_changed(ctx, Vec2::new(BAR_W, BAR_EMPTY_H));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    if !window_title.is_empty() {
+                        self.status_line = format!("Target [0x{premiere_hwnd:x}]: {window_title}");
+                    }
+                }
+                HotkeyEvent::HidePalette => {
+                    self.hide_and_refocus_premiere(ctx);
                 }
                 HotkeyEvent::DirectShortcut { key_code, ctrl, alt, shift, premiere_hwnd } => {
                     if premiere_hwnd != 0 {
-                        // 1. Check per-command shortcuts configured in Premiere Settings (`command_shortcuts`)
                         let mut matched_cmd: Option<ActionItem> = None;
                         for (cmd_id, sc_str) in &self.app_settings.command_shortcuts {
                             if let Some((vk, sc_c, sc_a, sc_s)) = parse_shortcut_str(sc_str) {
@@ -447,14 +465,16 @@ impl eframe::App for ArzExcaliburApp {
                         if let Some(chosen) = matched_cmd {
                             if chosen.entry.has_submenu {
                                 self.visible = true;
+                                self.had_focus_since_show = false;
+                                self.last_requested_size = Vec2::ZERO;
                                 self.active_submenu = Some(chosen);
+                                show_and_center_arz_window(480, 210);
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                             } else {
                                 self.execute_direct_item(&chosen, ctx);
                             }
                         } else {
-                            // 2. Fallback: direct shortcut embedded inside `macros.json`
                             for m in &self.user_macros {
                                 if m.shortcut_vk == Some(key_code)
                                     && m.ctrl == ctrl
@@ -483,6 +503,25 @@ impl eframe::App for ArzExcaliburApp {
             }
         }
 
+        // 2. Receive background-parsed `.prfpset` user presets cleanly without blocking UI!
+        let mut latest_presets: Option<Vec<CompiledPremierePreset>> = None;
+        while let Ok(list) = self.preset_loaded_rx.try_recv() {
+            latest_presets = Some(list);
+        }
+        if let Some(list) = latest_presets {
+            let count = list.len();
+            self.loaded_presets = list;
+            self.actions = build_premiere_catalog(&self.loaded_presets, &self.user_macros);
+            for act in &mut self.actions {
+                act.entry.enabled = !self.app_settings.hidden_ids.contains(&act.entry.id);
+            }
+            if let Ok(mut guard) = self.bridge.lock() {
+                guard.catalog_snapshot = self.actions.iter().map(|a| a.entry.clone()).collect();
+            }
+            self.status_line = format!("Presets loaded: {count}");
+        }
+
+        // 3. Reload settings or macros pushed live from Premiere Settings UI
         let (reload_cfg, reload_macs) = if let Ok(mut guard) = self.bridge.lock() {
             let rc = guard.reload_settings_flag;
             let rm = guard.reload_macros_flag;
@@ -500,10 +539,7 @@ impl eframe::App for ArzExcaliburApp {
         }
         if reload_macs {
             self.user_macros = load_user_macros(Path::new("macros.json"));
-            let presets = discover_latest_prfpset_file()
-                .and_then(|p| parse_prfpset_file(&p).ok())
-                .unwrap_or_default();
-            self.actions = build_premiere_catalog(&presets, &self.user_macros);
+            self.actions = build_premiere_catalog(&self.loaded_presets, &self.user_macros);
             for act in &mut self.actions {
                 act.entry.enabled = !self.app_settings.hidden_ids.contains(&act.entry.id);
             }
@@ -512,10 +548,19 @@ impl eframe::App for ArzExcaliburApp {
             }
         }
 
-        // STRICT BACKGROUND SILENT MODE: when hidden, keep Win32 HWND hidden and skip ALL UI layout/focus!
+        if !is_palette_visible_flag() {
+            self.visible = false;
+        }
         if !self.visible {
-            hide_arz_window();
-            ctx.request_repaint_after(Duration::from_millis(75));
+            return;
+        }
+
+        // Auto-dismiss cleanly if user clicked outside ARZ-Excalibur (e.g. back onto Premiere Timeline)
+        let (fg_host, _) = detect_foreground_host();
+        if fg_host == ActiveHostApp::ArzPalette {
+            self.had_focus_since_show = true;
+        } else if self.had_focus_since_show {
+            self.reset_and_hide(ctx, false);
             return;
         }
 
@@ -526,7 +571,7 @@ impl eframe::App for ArzExcaliburApp {
 
         egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
             if let Some(sub_item) = self.active_submenu.clone() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, 210.0)));
+                self.set_viewport_size_if_changed(ctx, Vec2::new(480.0, 210.0));
                 ui.horizontal(|ui| {
                     ui.heading(&sub_item.entry.name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -625,7 +670,7 @@ impl eframe::App for ArzExcaliburApp {
                 // Minimalist 500x84 Bar Mode when empty: dead-center optical watermark + vertically centered input cursor!
                 if !has_query {
                     ctx.request_repaint_after(Duration::from_millis(60));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(BAR_W, BAR_EMPTY_H)));
+                    self.set_viewport_size_if_changed(ctx, Vec2::new(BAR_W, BAR_EMPTY_H));
 
                     let full_rect = ui.max_rect();
                     if let Some(tex) = &self.watermark_tex {
@@ -730,7 +775,7 @@ impl eframe::App for ArzExcaliburApp {
 
                 if !self.app_settings.grid_mode {
                     let win_h = (74.0 + (count.min(9) as f32) * 28.0).clamp(110.0, 340.0);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(480.0, win_h)));
+                    self.set_viewport_size_if_changed(ctx, Vec2::new(480.0, win_h));
                     ui.separator();
                     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                         for (vis_idx, (_, act_idx)) in matched_indices.iter().enumerate() {
@@ -756,7 +801,7 @@ impl eframe::App for ArzExcaliburApp {
                 let rows = count.div_ceil(GRID_COLS).max(1);
                 let visible_rows = rows.min(3) as f32;
                 let win_h = (84.0 + visible_rows * 142.0).clamp(160.0, 510.0);
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(600.0, win_h)));
+                self.set_viewport_size_if_changed(ctx, Vec2::new(600.0, win_h));
 
                 ui.separator();
 
@@ -886,14 +931,25 @@ fn load_window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
-    // Single-instance check: if another ARZ-Excalibur background daemon is already listening on 127.0.0.1:49872, exit cleanly!
-    let Some(bridge) = try_start_loopback_bridge_server() else {
+    let args: Vec<String> = std::env::args().collect();
+    let managed_by_premiere = args.iter().any(|a| a == "--managed-by-premiere");
+    let show_immediately = args.iter().any(|a| a == "--show");
+    let force_hidden = args.iter().any(|a| a == "--hidden");
+    let test_any_fg = args.iter().any(|a| a == "--test-any-fg");
+
+    if test_any_fg {
+        set_allow_any_foreground_for_test(true);
+    }
+
+    // Single-instance check: if already running in background, manual launch opens the Spotlight bar!
+    let Some(bridge) = try_start_loopback_bridge_server(managed_by_premiere) else {
+        if !managed_by_premiere {
+            notify_running_instance_to_open();
+        }
         return Ok(());
     };
 
-    // Start hidden in the background unless `--show` is explicitly requested
-    let show_immediately = std::env::args().any(|a| a == "--show");
-    let start_hidden = !show_immediately;
+    let start_hidden = (managed_by_premiere || force_hidden) && !show_immediately;
 
     let mut vp = egui::ViewportBuilder::default()
         .with_title("ARZ-Excalibur")
